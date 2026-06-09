@@ -1,0 +1,23 @@
+{
+  "name": "find-human",
+  "version": "1.0.0",
+  "private": true,
+  "description": "揪出人类 —— 图灵测试现场（可真人参战）",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "14.2.35",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "lucide-react": "0.383.0"
+  },
+  "devDependencies": {
+    "autoprefixer": "10.4.19",
+    "postcss": "8.4.39",
+    "tailwindcss": "3.4.6"
+  }
+}

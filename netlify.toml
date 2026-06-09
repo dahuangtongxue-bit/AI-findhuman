@@ -1,0 +1,6 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+# Netlify 会自动检测 Next.js 并启用 Next Runtime（处理 /api/show Edge Function）。
+# 如构建因密钥扫描失败，在 Netlify 站点环境变量里加：SECRETS_SCAN_ENABLED = false
