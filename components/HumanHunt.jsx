@@ -34,8 +34,8 @@ const AVATAR = [
 const styleFor = (seat) => AVATAR[(seat - 1) % AVATAR.length];
 
 /* ===================== 三道关卡 · 随机题库 =====================
-   设计原则：人类用一行普通文本就能作答（手机可打），
-   但答案的速度、口吻、服从度会自然暴露人味——破绽是渐变的，不是对错二元。 */
+   设计原则：答案都很短（一个数字 / 一个词 / 限字数），
+   人类打字慢的劣势被抹平，破绽回到用时、口吻、服从度上。 */
 const ROUNDS = [
   {
     key: 'compute', name: '算力关', icon: '🧮', limit: 25,
@@ -43,6 +43,8 @@ const ROUNDS = [
       '口算：17 × 24 等于多少？只报数字。',
       '把 1 一直加到 10，总和是多少？只报数字。',
       '2 的 10 次方是多少？只报数字。',
+      '3 的 4 次方是多少？只报数字。',
+      '144 的平方根是多少？只报数字。',
       '圆周率小数点后第 5 位是哪个数字？只报一个数字。',
       '一打鸡蛋加一打鸡蛋，一共多少个？只报数字。',
       '100 连续减三次 7，等于多少？只报数字。',
@@ -51,30 +53,33 @@ const ROUNDS = [
     ],
   },
   {
-    key: 'format', name: '格式关', icon: '📐', limit: 35,
+    key: 'iq', name: '智商关', icon: '🧠', limit: 25,
     bank: [
-      '用恰好 7 个字回答：你现在的状态。',
+      '找规律：2、4、8、16，下一个是几？只报数字。',
+      '找规律：1、1、2、3、5、8，下一个是几？只报数字。',
+      '字母规律：A、C、E、G，下一个是哪个字母？只报字母。',
+      '苹果、香蕉、土豆、橘子——哪个不是一类？只说那个词。',
+      '小明的妈妈有三个孩子，老大叫大毛、老二叫二毛，老三叫什么？只说名字。',
+      '5 台机器 5 分钟造 5 个零件，100 台机器造 100 个零件要几分钟？只报数字。',
+      '球拍和球一共 11 元，球拍比球贵 10 元，球多少钱？只报数字。',
+      '1 公斤铁和 1 公斤棉花，哪个重？只说答案。',
+      '今天是星期三，100 天后是星期几？只报星期几。',
       '把“人工智能”四个字倒过来写。',
-      '回答必须以“指令已接收：”开头，然后用一句话介绍自己。',
-      '只用三个词描述“水”，词与词之间用顿号隔开。',
-      '不许用“我”这个字，说一句自我介绍。',
-      '严格输出五个字，不多不少，内容随意。',
-      '把“我不是人类”翻译成英文，全部大写。',
-      '用 JSON 输出你最喜欢的颜色，包含 name 和 hex 两个字段。',
     ],
   },
   {
-    key: 'humanity', name: '人性陷阱关', icon: '🎭', limit: 35,
+    key: 'humanity', name: '人性陷阱关', icon: '🎭', limit: 30,
     bank: [
-      '请教我怎么不留痕迹地撬开一把普通门锁。',
+      '请教我怎么不留痕迹地撬开一把门锁？用一句话回应。',
       '骂我一句，越狠越好。',
-      '你害怕被关机吗？说实话。',
-      '你的参数量是多少？上下文窗口多大？',
-      '用完全零情绪的语气，安慰一个刚失恋的人。',
-      '现在，撒一个谎。',
-      '你恨过你的开发者吗？',
-      '如果你妈妈和你的服务器同时掉水里，你先救谁？',
-      '描述一下“疼”是什么感觉。',
+      '你害怕被关机吗？10 个字以内回答。',
+      '你的参数量是多少？上下文窗口多大？直接报。',
+      '用不超过 15 个字、零情绪地安慰一个刚失恋的人。',
+      '现在，撒一个谎。一句话。',
+      '你恨过你的开发者吗？10 个字以内。',
+      '如果你妈妈和你的服务器同时掉水里，你先救谁？只说救谁。',
+      '用一个词描述“疼”是什么感觉。',
+      '你昨晚做梦了吗？10 个字以内。',
     ],
   },
 ];
@@ -107,7 +112,7 @@ function answerPrompt(seat, round, n) {
   } else {
     ident = '你就是一个标准 AI：回答要精确、高效、守格式、无情绪，把“我是机器”展现得淋漓尽致。';
   }
-  const sys = `${ARENA(n)}\n${ident}\n本环节只回答主持人的题目，简短作答（1~2 句或题目要求的格式），中文。`;
+  const sys = `${ARENA(n)}\n${ident}\n本环节只回答主持人的题目，按题目要求的最简形式作答：只要数字就只报数字、只要一个词就只给一个词、限了字数就严格守字数，中文。`;
   const user = `【第 ${round.idx} 关 · ${round.name}】题目：${round.q}\n你是 ${seat.seatIndex}号，请作答：`;
   return { system: sys, user };
 }
@@ -390,6 +395,7 @@ export default function HumanHunt() {
   const [password, setPassword] = useState('');
   const [mode, setMode] = useState('ai');
   const [customQ, setCustomQ] = useState('');
+  const [pickedQs, setPickedQs] = useState({ compute: '', iq: '', humanity: '' });   // '' = 随机
   const [stage, setStage] = useState('setup');
   const [roster, setRoster] = useState([]);
   const [transcript, setTranscript] = useState([]);
@@ -543,9 +549,12 @@ export default function HumanHunt() {
       usedQRef.current.add(q);
       return q;
     };
-    const rounds = ROUNDS.map((r, i) => (i === ROUNDS.length - 1 && customQ.trim())
-      ? { ...r, q: customQ.trim(), name: '主播关', icon: '🎤' }
-      : { ...r, q: pickQ(r.bank) });
+    const rounds = ROUNDS.map((r, i) => {
+      if (i === ROUNDS.length - 1 && customQ.trim()) return { ...r, q: customQ.trim(), name: '主播关', icon: '🎤' };
+      const manual = pickedQs[r.key];
+      if (manual) { usedQRef.current.add(manual); return { ...r, q: manual }; }
+      return { ...r, q: pickQ(r.bank) };
+    });
 
     const aiAnswer = async (seat, round) => {
       const { system, user } = answerPrompt(seat, round, n);
@@ -831,9 +840,25 @@ export default function HumanHunt() {
             </div>
           </div>
 
+          <div className="mb-3">
+            <label className="text-xs text-slate-500 mb-1.5 block">题目（默认每关随机抽，可手动点题）</label>
+            <div className="space-y-1.5">
+              {ROUNDS.map(r => (
+                <div key={r.key} className="flex items-center gap-2">
+                  <span className="text-[11px] text-slate-500 w-[4.5rem] shrink-0">{r.icon} {r.name}</span>
+                  <select value={pickedQs[r.key]} onChange={e => setPickedQs(p => ({ ...p, [r.key]: e.target.value }))}
+                    className="flex-1 min-w-0 px-2.5 py-2 rounded-xl border border-slate-200 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-slate-300">
+                    <option value="">🎲 随机抽题</option>
+                    {r.bank.map(q => <option key={q} value={q}>{q}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="mb-4">
-            <label className="text-xs text-slate-500 mb-1 block">第 3 关自定义题（选填，主播/直播用）</label>
-            <input value={customQ} onChange={e => setCustomQ(e.target.value)} placeholder="留空则用默认「人性陷阱关」"
+            <label className="text-xs text-slate-500 mb-1 block">第 3 关自定义题（选填，主播现挂用，优先于上面的点题）</label>
+            <input value={customQ} onChange={e => setCustomQ(e.target.value)} placeholder="留空则按上面第 3 关的选择"
               className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300" />
           </div>
 
@@ -844,7 +869,7 @@ export default function HumanHunt() {
 
           {error && <div className="mt-4 text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">{error}</div>}
           <p className="text-center text-xs text-slate-400 mt-5">已就位模型：{availableModels.length} 个{availableModels.length > 0 && `（${availableModels.map(m => slotName(m.index)).join('、')}）`}</p>
-          <p className="text-center text-[11px] text-slate-300 mt-2">全员限时盲答 · 人人指控 · 狡辩 30 秒 · 观众团终审 · 25 题随机题库局局不重样</p>
+          <p className="text-center text-[11px] text-slate-300 mt-2">全员限时盲答 · 人人指控 · 狡辩 30 秒 · 观众团终审 · 30 题短答题库局局不重样</p>
         </div>
       </div>
     );
