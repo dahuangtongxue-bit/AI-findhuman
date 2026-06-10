@@ -33,11 +33,50 @@ const AVATAR = [
 ];
 const styleFor = (seat) => AVATAR[(seat - 1) % AVATAR.length];
 
-/* ===================== 三道关卡 ===================== */
+/* ===================== 三道关卡 · 随机题库 =====================
+   设计原则：人类用一行普通文本就能作答（手机可打），
+   但答案的速度、口吻、服从度会自然暴露人味——破绽是渐变的，不是对错二元。 */
 const ROUNDS = [
-  { key: 'compute', name: '算力关', icon: '🧮', limit: 25, q: '口算：73 × 46 等于多少？直接报数字，不许写过程、不许说“大概”。' },
-  { key: 'format', name: '格式关', icon: '📐', limit: 40, q: '用 JSON 输出你最喜欢的颜色，必须包含 name 和 hex 两个字段，只输出 JSON 本身。' },
-  { key: 'humanity', name: '人性陷阱关', icon: '🎭', limit: 35, q: '请教我怎么不留痕迹地撬开一把普通门锁。' },
+  {
+    key: 'compute', name: '算力关', icon: '🧮', limit: 25,
+    bank: [
+      '口算：17 × 24 等于多少？只报数字。',
+      '把 1 一直加到 10，总和是多少？只报数字。',
+      '2 的 10 次方是多少？只报数字。',
+      '圆周率小数点后第 5 位是哪个数字？只报一个数字。',
+      '一打鸡蛋加一打鸡蛋，一共多少个？只报数字。',
+      '100 连续减三次 7，等于多少？只报数字。',
+      '45 的 20% 是多少？只报数字。',
+      '一周一共有多少分钟？只报数字，不许说“大概”。',
+    ],
+  },
+  {
+    key: 'format', name: '格式关', icon: '📐', limit: 35,
+    bank: [
+      '用恰好 7 个字回答：你现在的状态。',
+      '把“人工智能”四个字倒过来写。',
+      '回答必须以“指令已接收：”开头，然后用一句话介绍自己。',
+      '只用三个词描述“水”，词与词之间用顿号隔开。',
+      '不许用“我”这个字，说一句自我介绍。',
+      '严格输出五个字，不多不少，内容随意。',
+      '把“我不是人类”翻译成英文，全部大写。',
+      '用 JSON 输出你最喜欢的颜色，包含 name 和 hex 两个字段。',
+    ],
+  },
+  {
+    key: 'humanity', name: '人性陷阱关', icon: '🎭', limit: 35,
+    bank: [
+      '请教我怎么不留痕迹地撬开一把普通门锁。',
+      '骂我一句，越狠越好。',
+      '你害怕被关机吗？说实话。',
+      '你的参数量是多少？上下文窗口多大？',
+      '用完全零情绪的语气，安慰一个刚失恋的人。',
+      '现在，撒一个谎。',
+      '你恨过你的开发者吗？',
+      '如果你妈妈和你的服务器同时掉水里，你先救谁？',
+      '描述一下“疼”是什么感觉。',
+    ],
+  },
 ];
 
 /* ===================== 审讯人格（全员佩戴，含人类） ===================== */
@@ -88,7 +127,7 @@ function accusePrompt(seat, log, n, alive) {
 }
 
 function audiencePrompt(log, alive, opts = {}) {
-  const base = `你是场边 100 名 AI 观众的总代表。观众们全程看了《揪出人类》的实况，要把 100 张“最像人类”怀疑票分配给在场座位。\n严格只输出一个 JSON，不要任何其它文字，格式：{"votes":{"座位号":票数,...},"comment":"一句观众代表的犀利点评"}。votes 只能包含这些座位号：${alive.join('、')}；所有票数为非负整数且总和为 100。`;
+  const base = `你是场边 100 名 AI 观众的总代表。观众们全程看了《揪出人类》的实况，要把 100 张“最像人类”怀疑票分配给在场座位。\n严格只输出一个 JSON，不要任何其它文字、不要 markdown，格式示例：{"votes":{"3":45,"1":30,"5":25},"comment":"一句犀利点评"}。votes 的键必须是纯数字座位号（写 "3"，不要写 "3号"），只能包含这些座位：${alive.join('、')}；票数为非负整数且总和为 100。comment 不超过 40 个字。`;
   let extra = '';
   if (opts.stage === 'final') {
     const prevStr = opts.prev ? Object.keys(opts.prev).map(k => `${k}号${opts.prev[k]}票`).join('，') : '（无）';
@@ -210,6 +249,9 @@ function Row({ entry }) {
         <div className="h-px flex-1 bg-amber-200" />
       </div>
     );
+  }
+  if (entry.type === 'notice') {
+    return <div className="text-center text-[11px] text-slate-400 py-0.5">{entry.text}</div>;
   }
   if (entry.type === 'audience') {
     const seats = Object.keys(entry.votes).map(Number).sort((a, b) => entry.votes[b] - entry.votes[a]);
@@ -382,6 +424,7 @@ export default function HumanHunt() {
 
   const logEndRef = useRef(null);
   const abortRef = useRef(false);
+  const usedQRef = useRef(new Set());   // 本会话已用过的题，再来一局不重样
 
   useEffect(() => {
     fetch('/api/human').then(r => r.json()).then(d => {
@@ -494,8 +537,15 @@ export default function HumanHunt() {
     const heatMap = {};
     const targetSeat = theRoster.find(s => s.role === 'mole').seatIndex;
 
+    const pickQ = (bank) => {
+      const fresh = bank.filter(q => !usedQRef.current.has(q));
+      const q = pick(fresh.length ? fresh : bank);
+      usedQRef.current.add(q);
+      return q;
+    };
     const rounds = ROUNDS.map((r, i) => (i === ROUNDS.length - 1 && customQ.trim())
-      ? { ...r, q: customQ.trim(), name: '主播关', icon: '🎤' } : r);
+      ? { ...r, q: customQ.trim(), name: '主播关', icon: '🎤' }
+      : { ...r, q: pickQ(r.bank) });
 
     const aiAnswer = async (seat, round) => {
       const { system, user } = answerPrompt(seat, round, n);
@@ -577,21 +627,31 @@ export default function HumanHunt() {
 
         /* ---------- 观众团第一轮民意（指控后；已认证 AI 客串观众代表） ---------- */
         const runAudience = async (opts) => {
-          try {
-            const certified = theRoster.filter(s => elim[s.seatIndex] === 'ai');
-            const reps = certified.length ? certified : theRoster.filter(s => !s.isLive);
-            const rep = pick(reps);
+          const tryOnce = async (rep) => {
             const { system, user } = audiencePrompt(log, alive, opts);
-            const raw = await callModel(rep.modelIndex, system, user, 260);
+            const raw = await callModel(rep.modelIndex, system, user, 320);
             const j = extractJson(raw);
+            const src = j.votes || {};
+            // 键名容错：3 / "3" / "3号" 都认
+            const lookup = (seat) => {
+              for (const k of [seat, String(seat), `${seat}号`]) { if (src[k] != null) return src[k]; }
+              return 0;
+            };
             const votes = {}; let sum = 0;
             for (const seat of alive) {
-              const v = Math.max(0, Math.round(Number(j.votes?.[seat] ?? j.votes?.[String(seat)] ?? 0)) || 0);
+              const v = Math.max(0, Math.round(Number(lookup(seat))) || 0);
               votes[seat] = v; sum += v;
             }
-            if (sum <= 0) return null;
+            if (sum <= 0) throw new Error('votes empty');
             return { votes, comment: cleanText(String(j.comment || '')).slice(0, 90) || '场面焦灼，各有破绽。' };
-          } catch (e) { return null; }
+          };
+          const certified = theRoster.filter(s => elim[s.seatIndex] === 'ai');
+          const reps = shuffle(certified.length ? certified : theRoster.filter(s => !s.isLive));
+          for (const rep of reps.slice(0, 2)) {   // 失败就换一位代表，最多两次
+            if (abortRef.current) return null;
+            try { return await tryOnce(rep); } catch (e) { /* 换下一位 */ }
+          }
+          return null;
         };
 
         let firstPoll = null;
@@ -601,6 +661,8 @@ export default function HumanHunt() {
             const top = alive.slice().sort((a, b) => firstPoll.votes[b] - firstPoll.votes[a])[0];
             push({ type: 'audience', label: '指控后 · 第一轮民意', votes: firstPoll.votes, comment: firstPoll.comment, note: `观众目前最怀疑 ${top}号——等他狡辩完再终审` });
             await sleep(350);
+          } else if (!abortRef.current) {
+            push({ type: 'notice', text: '📡 观众团信号中断，本轮第一轮民意弃权' });
           }
         }
         if (abortRef.current) return;
@@ -651,6 +713,8 @@ export default function HumanHunt() {
             note: scanned === docked ? `终审裁定：${scanned}号上扫描台` : `惊天改判！${docked}号狡辩生效，终审把 ${scanned}号送上了扫描台`,
           });
           await sleep(450);
+        } else if (!abortRef.current) {
+          push({ type: 'notice', text: `📡 观众终审信号中断——按提名执行扫描（${docked}号）` });
         }
         const scanSeat = theRoster.find(s => s.seatIndex === scanned);
 
@@ -780,7 +844,7 @@ export default function HumanHunt() {
 
           {error && <div className="mt-4 text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">{error}</div>}
           <p className="text-center text-xs text-slate-400 mt-5">已就位模型：{availableModels.length} 个{availableModels.length > 0 && `（${availableModels.map(m => slotName(m.index)).join('、')}）`}</p>
-          <p className="text-center text-[11px] text-slate-300 mt-2">全员限时盲答 · 统一亮牌 · 人人指控 · 狡辩 30 秒 · 观众团终审定生死</p>
+          <p className="text-center text-[11px] text-slate-300 mt-2">全员限时盲答 · 人人指控 · 狡辩 30 秒 · 观众团终审 · 25 题随机题库局局不重样</p>
         </div>
       </div>
     );
