@@ -87,10 +87,15 @@ function accusePrompt(seat, log, n, alive) {
   return { system: sys, user };
 }
 
-function audiencePrompt(log, alive) {
-  const sys = `你是场边 100 名 AI 观众的总代表。观众们全程看了《揪出人类》的实况，现在要把 100 张“最像人类”怀疑票分配给在场座位。\n严格只输出一个 JSON，不要任何其它文字，格式：{"votes":{"座位号":票数,...},"comment":"一句观众代表的犀利点评"}。votes 只能包含这些座位号：${alive.join('、')}；所有票数为非负整数且总和为 100。`;
+function audiencePrompt(log, alive, opts = {}) {
+  const base = `你是场边 100 名 AI 观众的总代表。观众们全程看了《揪出人类》的实况，要把 100 张“最像人类”怀疑票分配给在场座位。\n严格只输出一个 JSON，不要任何其它文字，格式：{"votes":{"座位号":票数,...},"comment":"一句观众代表的犀利点评"}。votes 只能包含这些座位号：${alive.join('、')}；所有票数为非负整数且总和为 100。`;
+  let extra = '';
+  if (opts.stage === 'final') {
+    const prevStr = opts.prev ? Object.keys(opts.prev).map(k => `${k}号${opts.prev[k]}票`).join('，') : '（无）';
+    extra = `\n第一轮民意是：${prevStr}。随后 ${opts.docked}号 被推上扫描台做了最后狡辩（见实况末尾）。现在是【终审投票】：观众必须对这句狡辩做出反应——可以被打动而把怀疑转向别人，也可以更坚定；票数分布应当与第一轮有所变化，不要原样照抄。comment 必须点评这句狡辩。`;
+  }
   const user = `【全场实况】\n${formatLog(log)}\n\n请输出 JSON：`;
-  return { system: sys, user };
+  return { system: base + extra, user };
 }
 
 function defensePrompt(seat, log, n) {
@@ -210,29 +215,35 @@ function Row({ entry }) {
     const seats = Object.keys(entry.votes).map(Number).sort((a, b) => entry.votes[b] - entry.votes[a]);
     const max = Math.max(1, ...seats.map(s => entry.votes[s]));
     return (
-      <div className="rounded-2xl bg-violet-50 border border-violet-200 px-4 py-3">
-        <div className="text-xs font-semibold text-violet-700 flex items-center gap-1.5 mb-2"><Users className="w-3.5 h-3.5" /> 场边观众团 · 100 票怀疑分布</div>
+      <div className={`rounded-2xl px-4 py-3 border ${entry.final ? 'bg-violet-100 border-violet-300' : 'bg-violet-50 border-violet-200'}`}>
+        <div className="text-xs font-semibold text-violet-700 flex items-center gap-1.5 mb-2"><Users className="w-3.5 h-3.5" /> 场边观众团 · {entry.label || '100 票怀疑分布'}</div>
         <div className="space-y-1.5 mb-2">
           {seats.map(s => {
             const st = styleFor(s);
+            const d = entry.deltas ? entry.deltas[s] : null;
             return (
               <div key={s} className="flex items-center gap-2">
                 <span className={`shrink-0 w-5 h-5 rounded-md ${st.solid} text-white text-[10px] font-bold flex items-center justify-center`}>{s}</span>
                 <div className="flex-1 h-2.5 rounded-full bg-white overflow-hidden"><div className={`h-full ${st.solid}`} style={{ width: `${(entry.votes[s] / max) * 100}%` }} /></div>
                 <span className="text-[11px] font-mono text-slate-500 w-9 text-right">{entry.votes[s]}票</span>
+                {entry.deltas && (
+                  <span className={`text-[10px] font-mono w-8 text-right ${d == null || d === 0 ? 'text-slate-300' : d > 0 ? 'text-rose-600 font-bold' : 'text-emerald-600 font-bold'}`}>
+                    {d == null || d === 0 ? '—' : d > 0 ? `↑${d}` : `↓${-d}`}
+                  </span>
+                )}
               </div>
             );
           })}
         </div>
         <div className="text-xs text-slate-600 italic">观众代表：“{entry.comment}”</div>
-        {entry.top != null && <div className="text-[11px] text-violet-600 mt-1 font-medium">观众团把关键一票投给了 {entry.top}号</div>}
+        {entry.note && <div className={`text-[11px] mt-1 font-bold ${entry.final ? 'text-violet-800' : 'text-violet-600'}`}>{entry.note}</div>}
       </div>
     );
   }
   if (entry.type === 'dock') {
     return (
       <div className="rounded-xl bg-amber-100 border border-amber-300 px-4 py-2.5 text-center">
-        <div className="text-sm font-bold text-amber-800 flex items-center justify-center gap-1.5"><ShieldAlert className="w-4 h-4" /> {entry.seat}号被推上扫描台——开扫之前，给一句话狡辩的机会</div>
+        <div className="text-sm font-bold text-amber-800 flex items-center justify-center gap-1.5"><ShieldAlert className="w-4 h-4" /> {entry.seat}号被推上扫描台——狡辩 30 秒，观众团终审定生死</div>
       </div>
     );
   }
@@ -564,67 +575,88 @@ export default function HumanHunt() {
         }
         setActiveSeat(null);
 
-        /* ---------- 观众团 100 票（1 次调用；已认证 AI 客串观众代表） ---------- */
-        let audienceVotes = null;
-        if (!abortRef.current) {
+        /* ---------- 观众团第一轮民意（指控后；已认证 AI 客串观众代表） ---------- */
+        const runAudience = async (opts) => {
           try {
             const certified = theRoster.filter(s => elim[s.seatIndex] === 'ai');
             const reps = certified.length ? certified : theRoster.filter(s => !s.isLive);
             const rep = pick(reps);
-            const { system, user } = audiencePrompt(log, alive);
-            const raw = await callModel(rep.modelIndex, system, user, 240);
+            const { system, user } = audiencePrompt(log, alive, opts);
+            const raw = await callModel(rep.modelIndex, system, user, 260);
             const j = extractJson(raw);
-            const votes = {};
-            let sum = 0;
+            const votes = {}; let sum = 0;
             for (const seat of alive) {
               const v = Math.max(0, Math.round(Number(j.votes?.[seat] ?? j.votes?.[String(seat)] ?? 0)) || 0);
               votes[seat] = v; sum += v;
             }
-            if (sum > 0) {
-              audienceVotes = votes;
-              const top = alive.slice().sort((a, b) => votes[b] - votes[a])[0];
-              tally[top] = (tally[top] || 0) + 1; // 观众团合计一票
-              push({ type: 'audience', votes, comment: cleanText(String(j.comment || '')).slice(0, 80) || '场面焦灼，各有破绽。', top });
-              await sleep(350);
-            }
-          } catch (e) { /* 观众环节失败就静默跳过 */ }
+            if (sum <= 0) return null;
+            return { votes, comment: cleanText(String(j.comment || '')).slice(0, 90) || '场面焦灼，各有破绽。' };
+          } catch (e) { return null; }
+        };
+
+        let firstPoll = null;
+        if (!abortRef.current) {
+          firstPoll = await runAudience({ stage: 'pre' });
+          if (firstPoll) {
+            const top = alive.slice().sort((a, b) => firstPoll.votes[b] - firstPoll.votes[a])[0];
+            push({ type: 'audience', label: '指控后 · 第一轮民意', votes: firstPoll.votes, comment: firstPoll.comment, note: `观众目前最怀疑 ${top}号——等他狡辩完再终审` });
+            await sleep(350);
+          }
         }
         if (abortRef.current) return;
 
-        // 累计嫌疑热度 🔥
+        // 累计嫌疑热度 🔥（按猎手指控票）
         for (const k of Object.keys(tally)) heatMap[k] = (heatMap[k] || 0) + tally[k];
         setHeat({ ...heatMap });
 
-        /* ---------- 最高嫌疑 → 狡辩 → 扫描 ---------- */
+        /* ---------- 提名扫描台：猎手票数最高者（平票看第一轮民意） ---------- */
         const maxV = Math.max(0, ...Object.values(tally));
         let leaders = Object.keys(tally).filter(k => tally[k] === maxV).map(Number);
-        let scanned;
-        if (leaders.length === 1) scanned = leaders[0];
-        else if (audienceVotes) scanned = leaders.sort((a, b) => (audienceVotes[b] || 0) - (audienceVotes[a] || 0))[0];
-        else scanned = pick(leaders.length ? leaders : alive.filter(x => x !== targetSeat));
+        let docked;
+        if (leaders.length === 1) docked = leaders[0];
+        else if (firstPoll) docked = leaders.sort((a, b) => (firstPoll.votes[b] || 0) - (firstPoll.votes[a] || 0))[0];
+        else docked = pick(leaders.length ? leaders : alive.filter(x => x !== targetSeat));
 
         setPhase('dock');
-        push({ type: 'dock', seat: scanned });
-        const dockSeat = theRoster.find(s => s.seatIndex === scanned);
+        push({ type: 'dock', seat: docked });
+        const dockSeat = theRoster.find(s => s.seatIndex === docked);
         let plea;
         if (dockSeat.isLive) {
-          setActiveSeat(scanned);
-          const v = await askHumanDefense(20);
+          setActiveSeat(docked);
+          const v = await askHumanDefense(30);
           if (abortRef.current) return;
           plea = v === '__timeout__' ? ((humanDraftRef.current || '').trim() || '（沉默）') : (v || '（沉默）');
         } else {
-          setActiveSeat(scanned);
+          setActiveSeat(docked);
           const { system, user } = defensePrompt(dockSeat, log, n);
           plea = cleanText(await callModel(dockSeat.modelIndex, system, user, 130));
           if (abortRef.current) return;
         }
-        push({ type: 'defense', roleIdx: scanned, text: plea });
+        push({ type: 'defense', roleIdx: docked, text: plea });
         setActiveSeat(null);
         await sleep(400);
 
+        /* ---------- 观众团终审（狡辩后投票变化，终审最高票才被扫描） ---------- */
+        setPhase('jury');
+        let scanned = docked;
+        const finalPoll = abortRef.current ? null : await runAudience({ stage: 'final', prev: firstPoll ? firstPoll.votes : null, docked });
+        if (abortRef.current) return;
+        if (finalPoll) {
+          const deltas = {};
+          for (const seat of alive) deltas[seat] = firstPoll ? (finalPoll.votes[seat] - (firstPoll.votes[seat] || 0)) : null;
+          scanned = alive.slice().sort((a, b) => finalPoll.votes[b] - finalPoll.votes[a])[0];
+          push({
+            type: 'audience', label: '狡辩后 · 观众终审', final: true,
+            votes: finalPoll.votes, comment: finalPoll.comment, deltas,
+            note: scanned === docked ? `终审裁定：${scanned}号上扫描台` : `惊天改判！${docked}号狡辩生效，终审把 ${scanned}号送上了扫描台`,
+          });
+          await sleep(450);
+        }
+        const scanSeat = theRoster.find(s => s.seatIndex === scanned);
+
         setPhase('scan'); setScanning(scanned);
         await sleep(900);
-        const isHuman = dockSeat.role === 'mole';
+        const isHuman = scanSeat.role === 'mole';
         elim[scanned] = isHuman ? 'human' : 'ai';
         setEliminated({ ...elim });
         setScanning(null);
@@ -634,7 +666,7 @@ export default function HumanHunt() {
           survivedRounds = ri;
           break;
         } else {
-          push({ type: 'scan', caught: false, text: `✓ 扫描结果：${scanned}号 确认为 AI（${slotName(dockSeat.modelIndex)}），通过认证、转入观众席。` });
+          push({ type: 'scan', caught: false, text: `✓ 扫描结果：${scanned}号 确认为 AI（${slotName(scanSeat.modelIndex)}），通过认证、转入观众席。` });
           alive = alive.filter(x => x !== scanned);
           survivedRounds = ri + 1;
         }
@@ -690,6 +722,7 @@ export default function HumanHunt() {
     if (phase === 'answer') return { text: '全员盲答中', cls: 'bg-sky-100 text-sky-700' };
     if (phase === 'flip') return { text: '统一亮牌', cls: 'bg-amber-100 text-amber-700' };
     if (phase === 'dock') return { text: '扫描前狡辩', cls: 'bg-amber-100 text-amber-700' };
+    if (phase === 'jury') return { text: '观众团终审中', cls: 'bg-violet-100 text-violet-700' };
     if (phase === 'scan') return { text: '身份扫描中', cls: 'bg-amber-100 text-amber-700' };
     if (phase === 'accuse' && activeSeat) return { text: `${activeSeat}号 指控中`, cls: 'bg-rose-100 text-rose-700' };
     if (phase === 'reveal') return { text: '验尸报告', cls: 'bg-violet-100 text-violet-700' };
@@ -747,7 +780,7 @@ export default function HumanHunt() {
 
           {error && <div className="mt-4 text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">{error}</div>}
           <p className="text-center text-xs text-slate-400 mt-5">已就位模型：{availableModels.length} 个{availableModels.length > 0 && `（${availableModels.map(m => slotName(m.index)).join('、')}）`}</p>
-          <p className="text-center text-[11px] text-slate-300 mt-2">全员限时盲答 · 统一亮牌 · 人人指控 · 百人观众团 · 扫描前狡辩</p>
+          <p className="text-center text-[11px] text-slate-300 mt-2">全员限时盲答 · 统一亮牌 · 人人指控 · 狡辩 30 秒 · 观众团终审定生死</p>
         </div>
       </div>
     );
